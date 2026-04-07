@@ -1,1 +1,1 @@
-/home/mark/as-gui/target/debug/as-gui: /home/mark/as-gui/src/main.rs
+/home/mark/as-gui-old/target/debug/as-gui: /home/mark/as-gui-old/src/main.rs

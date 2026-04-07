@@ -1,15 +1,15 @@
 # AS-GUI 📦
 
-A modern, terminal-based GUI for browsing and installing Arch Linux packages using `pacman`. Built with Rust and featuring fuzzy search, interactive installation, and a clean TUI interface.
+A modern, terminal-based GUI for browsing and installing Void Linux packages using `xbps`. Built with Rust and featuring fuzzy search, interactive installation, and a clean TUI interface.
 
 ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
-![Arch Linux](https://img.shields.io/badge/Arch%20Linux-1793D1?logo=arch-linux&logoColor=fff&style=for-the-badge)
+![Void Linux](https://img.shields.io/badge/Void%20Linux-478061?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge)
 
 ## ✨ Features
 
 - 🔍 **Fuzzy Search**: Fast, intelligent package searching across names and descriptions
-- 📋 **Package Browser**: Browse all available packages from Arch repositories
+- 📋 **Package Browser**: Browse all available packages from Void repositories
 - 💾 **Interactive Installation**: Install packages with real-time feedback
 - ✨ **Clean TUI**: Modern terminal user interface with intuitive navigation
 - ⚡ **Performance**: Async operations for smooth user experience
@@ -41,9 +41,9 @@ A modern, terminal-based GUI for browsing and installing Arch Linux packages usi
 
 ### Prerequisites
 
-- **Arch Linux** (or Arch-based distribution)
+- **Void Linux**
 - **Rust** (1.70+ recommended)
-- **pacman** package manager
+- **xbps** package manager (`xbps-query`, `xbps-install`)
 - **sudo** privileges for package installation
 
 ### Build from Source
@@ -113,7 +113,7 @@ The application will automatically load all available packages from your configu
 4. **Wait for installation** to complete
 5. **Press Enter** to return to the package browser
 
-The application will temporarily exit GUI mode during installation to provide full terminal access for `pacman`.
+The application will temporarily exit GUI mode during installation to provide full terminal access for `xbps-install`.
 
 ## 🏗️ Architecture
 
@@ -128,7 +128,7 @@ The application will temporarily exit GUI mode during installation to provide fu
 ### Key Components
 
 - **App State Management**: Centralized state with browsing, loading, and error states
-- **Package Loading**: Async pacman repository parsing
+- **Package Loading**: Async xbps repository parsing
 - **Search Engine**: Multi-word fuzzy matching with relevance scoring
 - **Terminal Management**: Robust state transitions between GUI and terminal modes
 - **Installation Handler**: Interactive package installation with error handling
@@ -182,13 +182,13 @@ cargo fmt
 - The fix includes improved terminal state restoration with proper buffer clearing
 
 **Application won't start:**
-- Ensure you're running on **Arch Linux** or compatible distribution
-- Check that `pacman` is available: `which pacman`
+- Ensure you're running on **Void Linux**
+- Check that `xbps-query` is available: `which xbps-query`
 - Verify Rust installation: `rustc --version`
 
 **Permission denied during installation:**
 - Make sure you have `sudo` privileges
-- Package installation requires root access via `sudo pacman -S`
+- Package installation requires root access via `sudo xbps-install`
 
 **Slow package loading:**
 - Large repository indexes may take a moment to load
@@ -235,7 +235,7 @@ git push origin feature/amazing-feature
 - [ ] **Package Information**: Show more detailed package metadata
 - [ ] **Configuration**: User preferences and settings
 - [ ] **Package Removal**: Uninstall packages through the GUI
-- [ ] **AUR Support**: Integration with Arch User Repository
+- [ ] **Repository Filtering**: Filter results by repository source
 - [ ] **Themes**: Customizable color schemes
 
 ## 📄 License
@@ -244,13 +244,13 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 ## 🙏 Acknowledgments
 
-- **Arch Linux** community for the excellent package management system
+- **Void Linux** community for the excellent package management system
 - **Ratatui** team for the amazing TUI framework
 - **Rust** community for the powerful language and ecosystem
 
 ---
 
-**Made with ❤️ for the Arch Linux community**
+**Made with ❤️ for the Void Linux community**
 
-*"I use Arch BTW" - Now with a GUI! 🏹*
+*"Void + xbps" - Now with a GUI!*
 # as-gui

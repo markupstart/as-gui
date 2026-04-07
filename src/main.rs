@@ -7,10 +7,11 @@ use ratatui::{
     Frame, Terminal,
 };
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use std::collections::BTreeSet;
 use std::{error::Error, io, time::Duration, thread};
 use tokio::process::Command;
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
@@ -34,6 +35,7 @@ enum AppState {
 struct App {
     packages: Vec<Package>,
     filtered_packages: Vec<usize>,
+    selected_packages: BTreeSet<usize>,
     list_state: ListState,
     search_query: String,
     package_details: String,
@@ -49,6 +51,7 @@ impl App {
         Self {
             packages: Vec::new(),
             filtered_packages: Vec::new(),
+            selected_packages: BTreeSet::new(),
             list_state,
             search_query: String::new(),
             package_details: String::new(),
@@ -58,54 +61,65 @@ impl App {
     }
 
     async fn load_packages(&mut self) -> Result<(), Box<dyn Error>> {
-        // Use pacman -Ss instead of -Sl for better performance and descriptions
-        let output = Command::new("pacman")
-            .args(["-Ss", ""])
+        // Query all remote packages with descriptions from xbps repositories.
+        let output = Command::new("xbps-query")
+            .args(["-Rs", ""])
             .output()
             .await?;
 
         if !output.status.success() {
-            return Err("Failed to run pacman -Ss".into());
+            return Err("Failed to run xbps-query -Rs".into());
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut packages = Vec::new();
-        let mut current_package: Option<Package> = None;
 
-        // Parse packages from -Ss output (different format than -Sl)
+        // Typical xbps-query -Rs line format:
+        // [*] package-name-version - description
         for line in stdout.lines() {
-            if line.starts_with(' ') {
-                // This is a description line
-                if let Some(ref mut pkg) = current_package {
-                    pkg.description = line.trim().to_string();
-                    packages.push(pkg.clone());
-                    current_package = None;
+            let raw = line.trim();
+            if raw.is_empty() {
+                continue;
+            }
+
+            let normalized = if raw.starts_with('[') {
+                match raw.find(']') {
+                    Some(end) => raw[end + 1..].trim(),
+                    None => raw,
                 }
             } else {
-                // This is a package line: repo/name version [status]
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    let repo_name = parts[0];
-                    let version = parts[1];
-                    
-                    if let Some(slash_pos) = repo_name.find('/') {
-                        let repository = repo_name[..slash_pos].to_string();
-                        let name = repo_name[slash_pos + 1..].to_string();
-                        
-                        current_package = Some(Package {
-                            name,
-                            version: version.to_string(),
-                            description: "Loading...".to_string(),
-                            repository,
-                        });
-                    }
-                }
+                raw
+            };
+
+            if normalized.is_empty() {
+                continue;
             }
-        }
-        
-        // Handle last package if no description follows
-        if let Some(pkg) = current_package {
-            packages.push(pkg);
+
+            let (id_part, description) = match normalized.split_once(" - ") {
+                Some((id, desc)) => (id.trim(), desc.trim().to_string()),
+                None => {
+                    let mut parts = normalized.split_whitespace();
+                    let id = parts.next().unwrap_or("").trim();
+                    let desc = parts.collect::<Vec<_>>().join(" ");
+                    (id, desc)
+                }
+            };
+
+            if id_part.is_empty() {
+                continue;
+            }
+
+            let (name, version) = split_name_and_version(id_part);
+            if name.is_empty() {
+                continue;
+            }
+
+            packages.push(Package {
+                name,
+                version,
+                description,
+                repository: "void".to_string(),
+            });
         }
 
         self.packages = packages;
@@ -113,8 +127,6 @@ impl App {
         self.state = AppState::Browsing;
         Ok(())
     }
-
-    // Remove this function as it's no longer needed with pacman -Ss
 
     fn filter_packages(&mut self) {
         if self.search_query.is_empty() {
@@ -196,9 +208,20 @@ impl App {
         if let Some(selected) = self.list_state.selected() {
             if let Some(&pkg_idx) = self.filtered_packages.get(selected) {
                 if let Some(pkg) = self.packages.get(pkg_idx) {
+                    let selected_count = self.selected_packages.len();
+                    let selected_hint = if self.selected_packages.contains(&pkg_idx) {
+                        "yes"
+                    } else {
+                        "no"
+                    };
                     self.package_details = format!(
-                        "Package: {}\nVersion: {}\nRepository: {}\nDescription: {}",
-                        pkg.name, pkg.version, pkg.repository, pkg.description
+                        "Package: {}\nVersion: {}\nRepository: {}\nSelected: {}\nMarked packages: {}\nDescription: {}",
+                        pkg.name,
+                        pkg.version,
+                        pkg.repository,
+                        selected_hint,
+                        selected_count,
+                        pkg.description
                     );
                 }
             }
@@ -212,7 +235,7 @@ impl App {
                     self.state = AppState::Installing;
                     
                     let status = Command::new("sudo")
-                        .args(["pacman", "-S", "--noconfirm", &pkg.name])
+                        .args(["xbps-install", "-y", &pkg.name])
                         .status()
                         .await?;
 
@@ -228,36 +251,76 @@ impl App {
     }
 
     async fn install_selected_package_interactive(&mut self) -> Result<(), Box<dyn Error>> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(&pkg_idx) = self.filtered_packages.get(selected) {
-                if let Some(pkg) = self.packages.get(pkg_idx) {
-                    println!("Installing package: {}", pkg.name);
-                    println!("Description: {}", pkg.description);
-                    println!();
-                    
-                    let status = Command::new("sudo")
-                        .args(["pacman", "-S", &pkg.name])
-                        .spawn()?
-                        .wait()
-                        .await?;
+        let mut targets: Vec<usize> = self.selected_packages.iter().copied().collect();
 
-                    if status.success() {
-                        println!("\nPackage '{}' installed successfully!", pkg.name);
-                        println!("Press Enter to continue...");
-                        let mut input = String::new();
-                        std::io::stdin().read_line(&mut input)?;
-                        self.state = AppState::Browsing;
-                    } else {
-                        println!("\nInstallation failed!");
-                        println!("Press Enter to continue...");
-                        let mut input = String::new();
-                        std::io::stdin().read_line(&mut input)?;
-                        self.state = AppState::Error("Installation failed".to_string());
-                    }
+        // If nothing is marked, install the currently highlighted package.
+        if targets.is_empty() {
+            if let Some(selected) = self.list_state.selected() {
+                if let Some(&pkg_idx) = self.filtered_packages.get(selected) {
+                    targets.push(pkg_idx);
                 }
             }
         }
+
+        if targets.is_empty() {
+            return Ok(());
+        }
+
+        for pkg_idx in &targets {
+            if let Some(pkg) = self.packages.get(*pkg_idx) {
+                println!("Installing package: {}", pkg.name);
+                println!("Description: {}", pkg.description);
+                println!();
+
+                let status = Command::new("sudo")
+                    .args(["xbps-install", &pkg.name])
+                    .spawn()?
+                    .wait()
+                    .await?;
+
+                if !status.success() {
+                    println!("\nInstallation failed while processing '{}'.", pkg.name);
+                    println!("Press Enter to continue...");
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input)?;
+                    self.state = AppState::Error("Installation failed".to_string());
+                    return Ok(());
+                }
+            }
+        }
+
+        println!("\nInstalled {} package(s) successfully!", targets.len());
+        println!("Press Enter to continue...");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        self.selected_packages.clear();
+        self.state = AppState::Browsing;
         Ok(())
+    }
+
+    fn toggle_selected_current(&mut self) {
+        if let Some(selected) = self.list_state.selected() {
+            if let Some(&pkg_idx) = self.filtered_packages.get(selected) {
+                if self.selected_packages.contains(&pkg_idx) {
+                    self.selected_packages.remove(&pkg_idx);
+                } else {
+                    self.selected_packages.insert(pkg_idx);
+                }
+            }
+        }
+        self.update_package_details();
+    }
+
+    fn select_all_visible(&mut self) {
+        for pkg_idx in &self.filtered_packages {
+            self.selected_packages.insert(*pkg_idx);
+        }
+        self.update_package_details();
+    }
+
+    fn clear_selection(&mut self) {
+        self.selected_packages.clear();
+        self.update_package_details();
     }
 
     fn next_package(&mut self) {
@@ -297,6 +360,21 @@ impl App {
         self.search_query.pop();
         self.filter_packages();
     }
+}
+
+fn split_name_and_version(id: &str) -> (String, String) {
+    if let Some(idx) = id.rfind('-') {
+        let name = id[..idx].trim();
+        let version = id[idx + 1..].trim();
+
+        // XBPS versions contain digits (example: 2.43.0_1). If suffix
+        // does not look like a version, keep the entire string as name.
+        if !name.is_empty() && version.chars().any(|c| c.is_ascii_digit()) {
+            return (name.to_string(), version.to_string());
+        }
+    }
+
+    (id.to_string(), "unknown".to_string())
 }
 
 #[tokio::main]
@@ -354,6 +432,21 @@ async fn run_app<B: ratatui::backend::Backend + std::io::Write>(
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Down | KeyCode::Char('j') => app.next_package(),
                         KeyCode::Up | KeyCode::Char('k') => app.previous_package(),
+                        KeyCode::Char(' ') => {
+                            if app.state == AppState::Browsing {
+                                app.toggle_selected_current();
+                            }
+                        }
+                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if app.state == AppState::Browsing {
+                                app.select_all_visible();
+                            }
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if app.state == AppState::Browsing {
+                                app.clear_selection();
+                            }
+                        }
                         KeyCode::Enter => {
                             if app.state == AppState::Browsing {
                                 // Temporarily exit TUI mode for installation
@@ -433,7 +526,13 @@ fn ui(f: &mut Frame, app: &App) {
         .iter()
         .map(|&i| {
             let pkg = &app.packages[i];
+            let marker = if app.selected_packages.contains(&i) {
+                "[x] "
+            } else {
+                "[ ] "
+            };
             ListItem::new(Line::from(vec![
+                Span::styled(marker, Style::default().fg(Color::Yellow)),
                 Span::styled(&pkg.name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 Span::raw(" "),
                 Span::styled(&pkg.version, Style::default().fg(Color::Green)),
@@ -475,7 +574,7 @@ fn ui(f: &mut Frame, app: &App) {
     // Status bar
     let status_text = match &app.state {
         AppState::Loading => "Loading packages...",
-        AppState::Browsing => "↑/↓ or j/k: navigate | Enter: install | q: quit | Type to search",
+        AppState::Browsing => "↑/↓ or j/k: navigate | Space: mark | Ctrl+a: mark all visible | Ctrl+c: clear marks | Enter: install marked/current | q: quit | Type to search",
         AppState::Installing => "Installing package...",
         AppState::Error(msg) => msg,
     };
